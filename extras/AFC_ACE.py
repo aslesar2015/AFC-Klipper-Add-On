@@ -49,8 +49,9 @@ class AFC_ACE(afcBoxTurtle):
         self.home_state             = False
 
         # Selector configuration
-        self.steps_per_lane         = config.getint("steps_per_lane", 100)                                         # Steps to move between lanes
-        self.steps_per_position     = config.getint("steps_per_position", 50)                                      # Steps to move between positions (FREE/LOAD/UNLOAD)
+        self.lane1_offset           = config.getfloat("lane1_offset", 1.5)                                         # Offset from home to Lane 1 LOAD position (mm)
+        self.steps_per_lane         = config.getfloat("steps_per_lane", 100)                                       # Distance between lanes (mm) - needs calibration
+        self.steps_per_position     = config.getfloat("steps_per_position", 5.0)                                   # Distance between positions (mm) - measured as 5mm
         self.home_pin               = config.get("home_pin")                                                        # Pin for homing sensor
         self.selector_speed         = config.getfloat("selector_speed", 50)                                         # Selector movement speed in mm/s
         self.selector_accel         = config.getfloat("selector_accel", 50)                                         # Selector acceleration in mm/s^2
@@ -215,26 +216,37 @@ class AFC_ACE(afcBoxTurtle):
         """
         Calculates movement in mm to reach specified lane and position
 
+        Position calculation based on measured values:
+        - HOME (0mm) is the endstop position
+        - Lane 1 LOAD is at 1.5mm from HOME (lane1_offset)
+        - Positions are: LOAD (base), FREE (+5mm), UNLOAD (+10mm)
+        - Lanes are separated by steps_per_lane distance
+
         :param lane_index: Lane index (1-4)
         :param position: Target position (FREE=0, LOAD=1, UNLOAD=2)
         :return float: Return movement in mm to move selector
         """
+        # Start with Lane 1 LOAD offset from home
+        base_position = self.lane1_offset
+
         # Calculate lane offset (each lane is steps_per_lane apart)
         lane_offset = (lane_index - 1) * self.steps_per_lane
 
         # Calculate position offset within lane
-        # FREE = 0, LOAD = +steps_per_position, UNLOAD = -steps_per_position
-        if position == self.POSITION_FREE:
+        # LOAD = base position (0mm offset)
+        # FREE = +5mm from LOAD
+        # UNLOAD = +10mm from LOAD
+        if position == self.POSITION_LOAD:
             position_offset = 0
-        elif position == self.POSITION_LOAD:
-            position_offset = self.steps_per_position
+        elif position == self.POSITION_FREE:
+            position_offset = self.steps_per_position  # +5mm
         elif position == self.POSITION_UNLOAD:
-            position_offset = -self.steps_per_position
+            position_offset = self.steps_per_position * 2  # +10mm
         else:
             position_offset = 0
 
-        total_movement = lane_offset + position_offset
-        self.logger.debug(f"ACE: Selector movement to lane {lane_index} position {position}: {total_movement} steps")
+        total_movement = base_position + lane_offset + position_offset
+        self.logger.debug(f"ACE: Selector movement to lane {lane_index} position {position}: {total_movement}mm (base={base_position}, lane_offset={lane_offset}, pos_offset={position_offset})")
         return total_movement
 
     def move_to_position(self, lane, position):

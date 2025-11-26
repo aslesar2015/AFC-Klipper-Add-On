@@ -173,15 +173,22 @@ Uses Klipper's `[led]` configuration instead of `[output_pin]`:
 
 ### Critical Parameters to Calibrate
 
-1. **steps_per_lane** (current value: 100)
-   - Distance selector travels between adjacent lanes
-   - Method: Use `ACE_SET_POSITION` to move between lanes, measure actual distance
-   - Adjust until selector precisely aligns with each lane
+1. **lane1_offset** (configured value: 1.5mm) ✅
+   - Distance from HOME to Lane 1 LOAD position
+   - **MEASURED AND CONFIGURED** - Lane 1 LOAD is at 1.5mm from home endstop
+   - This is the base position for all calculations
 
-2. **steps_per_position** (current value: 50)
-   - Distance selector travels between FREE/LOAD/UNLOAD positions
-   - Method: Use `ACE_SET_POSITION` with different POSITION values
-   - Verify proper gear engagement in each position
+2. **steps_per_position** (configured value: 5.0mm) ✅
+   - Distance between positions within a lane (LOAD → FREE → UNLOAD)
+   - **MEASURED AND CONFIGURED**:
+     - LOAD to FREE: 5mm
+     - FREE to UNLOAD: 5mm
+     - Total range: 10mm (1.5mm to 11.5mm for Lane 1)
+
+3. **steps_per_lane** (placeholder value: 100mm) ⚠️ NEEDS CALIBRATION
+   - Distance selector travels between adjacent lanes
+   - Method: Manually find Lane 2 LOAD position, calculate: `Lane2_LOAD - lane1_offset`
+   - Repeat for lanes 3 and 4 to verify consistent spacing
 
 3. **dist_hub** (current value: 100mm per lane)
    - Distance from selector to hub sensor
@@ -199,11 +206,15 @@ Uses Klipper's `[led]` configuration instead of `[output_pin]`:
 # Home selector
 HOME_UNIT UNIT=ACE_1
 
-# Test lane selection and positions
-ACE_SET_POSITION UNIT=ACE_1 LANE=1 POSITION=1  # Lane 1, LOAD
-ACE_SET_POSITION UNIT=ACE_1 LANE=1 POSITION=0  # Lane 1, FREE
-ACE_SET_POSITION UNIT=ACE_1 LANE=1 POSITION=2  # Lane 1, UNLOAD
-ACE_SET_POSITION UNIT=ACE_1 LANE=2 POSITION=1  # Lane 2, LOAD
+# Test Lane 1 positions (should match measured values):
+ACE_SET_POSITION UNIT=ACE_1 LANE=1 POSITION=1  # Lane 1 LOAD (1.5mm)
+ACE_SET_POSITION UNIT=ACE_1 LANE=1 POSITION=0  # Lane 1 FREE (6.5mm)
+ACE_SET_POSITION UNIT=ACE_1 LANE=1 POSITION=2  # Lane 1 UNLOAD (11.5mm)
+
+# Find and test other lanes (adjust steps_per_lane after finding):
+ACE_SET_POSITION UNIT=ACE_1 LANE=2 POSITION=1  # Lane 2 LOAD
+ACE_SET_POSITION UNIT=ACE_1 LANE=3 POSITION=1  # Lane 3 LOAD
+ACE_SET_POSITION UNIT=ACE_1 LANE=4 POSITION=1  # Lane 4 LOAD
 
 # Check all sensors
 QUERY_ENDSTOPS
@@ -211,6 +222,25 @@ QUERY_ENDSTOPS
 # Standard AFC calibration
 CALIBRATE_AFC LANE=lane1        # Calibrate dist_hub for lane 1
 CALIBRATE_AFC BOWDEN=lane1      # Calibrate bowden length
+```
+
+### Position Calculation Formula
+
+```python
+total_position = lane1_offset + (lane_index - 1) * steps_per_lane + position_offset
+
+where:
+  lane1_offset = 1.5mm  (distance from HOME to Lane 1 LOAD)
+  steps_per_lane = ???mm (needs calibration - distance between lanes)
+  position_offset:
+    LOAD (1) = 0mm
+    FREE (0) = 5mm
+    UNLOAD (2) = 10mm
+
+Examples for Lane 1 (with lane1_offset=1.5, steps_per_lane=N/A):
+  LOAD:   1.5 + 0*N + 0  = 1.5mm
+  FREE:   1.5 + 0*N + 5  = 6.5mm
+  UNLOAD: 1.5 + 0*N + 10 = 11.5mm
 ```
 
 ---
