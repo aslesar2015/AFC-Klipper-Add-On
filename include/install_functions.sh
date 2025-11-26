@@ -58,6 +58,7 @@ template_unit_files() {
     "HTLF") MCU="${htlf_board_type}" ;;
     "BoxTurtle (4-Lane)") MCU="AFC" ;;
     "NightOwl") MCU="ERB" ;;
+    "AFC_ACE") MCU="ACE" ;;
     *) MCU="UNKNOWN" ;;  # Optional: fallback
   esac
 
@@ -119,6 +120,12 @@ copy_unit_files() {
         sed -i "s/include mcu\/MMB_QB.cfg/include mcu\/MMB_2.0_QB.cfg/g" "${afc_config_dir}/AFC_QuattroBox_1.cfg"
       fi
     fi
+    ;;
+
+  "AFC_ACE")
+    cp "${afc_path}/config/mcu/AcePro.cfg" "${afc_config_dir}/mcu/AcePro.cfg"
+    cp "${afc_path}/templates/AFC_Hardware-ACE.cfg" "${afc_config_dir}/AFC_Hardware.cfg"
+    cp "${afc_path}/templates/AFC_ACE_1.cfg" "${afc_config_dir}/AFC_${boxturtle_name}.cfg"
     ;;
 esac
 }
