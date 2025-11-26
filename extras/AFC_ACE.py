@@ -341,17 +341,22 @@ class AFC_ACE(afcBoxTurtle):
 
     def lane_tool_unloading(self, lane):
         """
-        Called when LANE_UNLOAD starts (full ejection for spool change)
-        NOT called during TOOL_UNLOAD (tool change - motors are synced)
+        Called when filament retraction starts (TOOL_UNLOAD or LANE_UNLOAD)
 
-        Move selector to UNLOAD position for active retraction from buffer zone
-        back through lane tube to eject filament completely
+        Move selector to UNLOAD position for active retraction onto spool.
+        This is CRITICAL to prevent filament from hanging loose and tangling.
 
-        :param lane: Lane object being ejected
+        Called from:
+        - TOOL_UNLOAD: After unsync, before bowden retract (to buffer zone)
+        - LANE_UNLOAD: At start of ejection (full retract from system)
+
+        Both operations need UNLOAD position to actively wind filament onto spool.
+
+        :param lane: Lane object being unloaded/ejected
         """
-        self.logger.info(f"ACE: Moving selector to UNLOAD position for lane ejection of {lane.name}")
+        self.logger.info(f"ACE: Moving selector to UNLOAD position for {lane.name} retraction")
         self.move_to_position(lane, self.POSITION_UNLOAD)
-        # Set LED to dim state during ejection
+        # Set LED to dim state during unloading
         self.set_individual_led(lane.index, True, brightness=0.3)
 
     def lane_tool_unloaded(self, lane):

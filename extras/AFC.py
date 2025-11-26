@@ -1436,6 +1436,12 @@ class afc:
         self.save_vars()
         # Synchronize and move filament out of the hub.
         cur_lane.unsync_to_extruder()
+
+        # Move selector to UNLOAD position for active retraction onto spool
+        # This prevents filament from hanging loose and tangling during retraction
+        if hasattr(cur_lane.unit_obj, 'lane_tool_unloading'):
+            cur_lane.unit_obj.lane_tool_unloading(cur_lane)
+
         if cur_lane.hub != 'direct':
             cur_lane.move_advanced(cur_hub.afc_unload_bowden_length * -1, SpeedMode.LONG, assist_active = AssistActive.YES)
         else:

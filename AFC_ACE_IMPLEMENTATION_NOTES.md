@@ -612,7 +612,7 @@ move_dis: 60                             # Movement past hub sensor (mm)
 
 ### Toolhead Unloading Process (Tool Change)
 
-The reverse process when changing tools during print - **selector position does NOT change**:
+The reverse process when changing tools during print - **selector MOVES to UNLOAD position**:
 
 1. **Disable buffer/tension assist** → stop monitoring tension sensors
 2. **Form tip** (if configured) → run tip shaping macro
@@ -623,20 +623,22 @@ The reverse process when changing tools during print - **selector position does 
    - **Still synchronized** - both motors work together
 5. **Additional retraction** (if configured) → `tool_sensor_after_extruder` distance
 6. **Unsync from extruder** → lane motor independent again
-7. **Retract through bowden** → pull back `afc_unload_bowden_length`
-   - Only Lane (Drive) motor working now
-   - Selector stays in current position (HOME or FREE)
-8. **Retract past hub sensor** → clear hub completely
-9. **Retract to buffer zone** → stop 20mm before hub sensor
-   - **Filament stays in buffer zone** - ready for quick reload
-10. **Selector returns to HOME** → `return_to_home()` called
-11. **Update status** → lane unloaded, LED off
+7. **Move selector to UNLOAD position** → ✅ **CRITICAL for ACE**
+   - Selector moves to position 2 (UNLOAD) - e.g., 11.5mm for Lane 1
+   - Engages filament with drive gear for active retraction
+   - **Prevents filament from hanging loose and tangling**
+   - **Actively winds filament onto spool during retraction**
+8. **Retract through bowden** → pull back `afc_unload_bowden_length`
+   - Lane (Drive) motor retracts through UNLOAD position
+   - Filament actively wound onto spool
+9. **Retract past hub sensor** → clear hub completely
+10. **Retract to buffer zone** → stop 20mm before hub sensor
+    - **Filament stays in buffer zone** - ready for quick reload
+11. **Selector returns to HOME** → `return_to_home()` called
+12. **Update status** → lane unloaded, LED off
 
 **Key Point:**
-During TOOL_UNLOAD for tool change, filament only goes back to buffer zone (20mm before hub). The selector does NOT move to UNLOAD position because:
-- Motors are synchronized during critical retract phase
-- No risk of filament getting stuck
-- Faster tool changes (no extra selector movement needed)
+UNLOAD position is REQUIRED during TOOL_UNLOAD to prevent filament tangling. Without it, retracted filament would hang loose instead of winding onto the spool.
 
 ---
 
@@ -701,7 +703,8 @@ Tool Change - Switch from Slot #1 to Slot #3 (T2):
    ├─ Retract from nozzle (Extruder + Lane motors SYNCED)
    ├─ Retract through extruder (STILL SYNCED - both motors work together)
    ├─ Unsync from extruder
-   ├─ Retract through bowden tube (only Lane motor, selector in HOME/FREE)
+   ├─ **Selector → UNLOAD position (11.5mm for Lane 1)** ✅
+   ├─ Retract through bowden tube (Lane motor winds onto spool via UNLOAD)
    ├─ Retract past hub sensor
    ├─ Retract to hub waiting zone (20mm before hub)
    ├─ Selector → HOME position
@@ -745,7 +748,9 @@ Command: LANE_UNLOAD LANE=lane1
 
 **Key Difference from TOOL_UNLOAD:**
 - LANE_UNLOAD = Full ejection from system (uses UNLOAD position)
-- TOOL_UNLOAD = Retract to buffer zone only (NO UNLOAD position)
+- TOOL_UNLOAD = Retract to buffer zone only (ALSO uses UNLOAD position)
+- **Both use UNLOAD position to wind filament onto spool**
+- **Only difference: retraction distance (buffer zone vs full ejection)**
 ```
 
 ---
@@ -773,11 +778,11 @@ The UNLOAD position is **actively used** in TWO scenarios:
 - This provides better retraction control and reduces motor load
 - After unload completes, selector returns to HOME position
 
-**IMPORTANT:** UNLOAD position is **NOT** used during `TOOL_UNLOAD` (tool change):
-- During tool change, filament only retracts to buffer zone (20mm before hub)
-- Extruder and Lane motors are synchronized during retract from toolhead
-- No risk of filament getting stuck - both motors work together
-- Selector stays in HOME or FREE position (depending on tension assist mode)
+**IMPORTANT:** UNLOAD position is used during BOTH operations:
+- `TOOL_UNLOAD` (tool change): Uses UNLOAD to wind filament onto spool during retract to buffer zone
+- `LANE_UNLOAD` (spool ejection): Uses UNLOAD to wind filament onto spool during full ejection
+- **Difference:** Only the retraction distance changes (buffer zone vs full ejection)
+- **Critical:** Without UNLOAD position, filament would hang loose and tangle during retraction
 
 ### Potential Improvements
 1. Add automatic LED blinking during loading (currently just dims)
@@ -883,8 +888,8 @@ Initially considered `[output_pin]` for simple on/off control, but switched to `
 ## File Checksums (for verification)
 
 Key files created/modified in this session:
-1. `extras/AFC_ACE.py` - 391 lines, main implementation with selector positioning **[UPDATED: Added lane_tool_unloading()]**
-2. `extras/AFC.py` - 1905 lines, modified to call lane_tool_unloading() during LANE_UNLOAD **[UPDATED: Added UNLOAD support for ejection]**
+1. `extras/AFC_ACE.py` - 396 lines, main implementation with selector positioning **[UPDATED: Added lane_tool_unloading()]**
+2. `extras/AFC.py` - 1911 lines, modified to call lane_tool_unloading() during BOTH TOOL_UNLOAD and LANE_UNLOAD **[UPDATED: Added UNLOAD support]**
 3. `extras/AFC_ACE_tension.py` - 280 lines, tension assist system
 4. `config/mcu/AcePro.cfg` - 38 lines, pinout definitions
 5. `templates/AFC_ACE_1.cfg` - 221 lines, complete configuration with tension assist
@@ -900,9 +905,10 @@ All files use standard AFC copyright header and GPLv3 license.
 - Improved motor efficiency and retraction reliability
 
 **Important Clarification:**
-- `TOOL_UNLOAD` (tool change): Does NOT use UNLOAD position - motors are synced
-- `LANE_UNLOAD` (spool ejection): DOES use UNLOAD position - active retraction needed
-- This design prevents unnecessary selector movements during fast tool changes
+- `TOOL_UNLOAD` (tool change): DOES use UNLOAD position - prevents filament tangling
+- `LANE_UNLOAD` (spool ejection): DOES use UNLOAD position - full ejection
+- Both operations wind filament onto spool via UNLOAD position
+- Difference is only retraction distance (buffer zone vs complete ejection)
 
 ---
 
