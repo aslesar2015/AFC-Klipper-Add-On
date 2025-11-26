@@ -876,11 +876,53 @@ Configuration was adapted to AFC framework while preserving:
 
 ---
 
-## Next Steps for User
+## Installation Instructions
+
+### Option 1: Automated Installation (Recommended)
+
+1. **Run the installation script:**
+   ```bash
+   cd ~/AFC-Klipper-Add-On
+   ./install-afc.sh
+   ```
+
+2. **Select AFC_ACE as installation type:**
+   - Press `T` to cycle through installation types
+   - Select `AFC_ACE` from the list
+   - Choose your preferred options (tip forming, cutters, macros, etc.)
+   - Press `I` to install
+
+3. **The script will automatically:**
+   - Copy `config/mcu/AcePro.cfg` to `~/printer_data/config/AFC/mcu/`
+   - Copy `templates/AFC_ACE_1.cfg` to `~/printer_data/config/AFC/AFC_ACE_1.cfg`
+   - Copy `templates/AFC_Hardware-ACE.cfg` to `~/printer_data/config/AFC/AFC_Hardware.cfg`
+   - Add AFC includes to printer.cfg (if selected)
+   - Link Python extensions to Klipper
+
+4. **Configure serial device:**
+   - Edit `~/printer_data/config/AFC/AFC_ACE_1.cfg`
+   - Update `serial: /dev/serial/by-id/usb-Klipper_stm32f103xe_...` with your actual device ID
+   - Find your device with: `ls /dev/serial/by-id/`
+
+5. **Configure toolhead sensors:**
+   - Edit `~/printer_data/config/AFC/AFC_Hardware.cfg`
+   - Set `pin_tool_start` and `pin_tool_end` pins
+   - Adjust `tool_stn` distance (sensor to nozzle)
+
+6. **Restart Klipper and test:**
+   ```bash
+   sudo systemctl restart klipper
+   ```
+   - Check logs: `tail -f /tmp/klippy.log`
+   - Home selector: `HOME_UNIT UNIT=ACE_1`
+   - Test positions: `ACE_SET_POSITION UNIT=ACE_1 LANE=1 POSITION=1`
+
+### Option 2: Manual Installation
 
 1. **Copy configuration files:**
    - Copy `templates/AFC_ACE_1.cfg` to printer config directory
    - Copy `templates/AFC_Hardware-ACE.cfg` if using extruder/buffer sensors
+   - Copy `config/mcu/AcePro.cfg` to mcu subdirectory
    - Include both files in printer.cfg
 
 2. **Configure toolhead sensors:**
@@ -945,6 +987,15 @@ Key files created/modified in this session:
 All files use standard AFC copyright header and GPLv3 license.
 
 ### Latest Changes (2025-11-27)
+
+**Feature: Installation Script Support**
+- Added AFC_ACE to install-afc.sh installation options
+- Automated deployment of configuration files
+- Custom ASCII logo in installation menu
+- Unit naming with default "ACE_1"
+- Automatic file copying for AcePro.cfg, AFC_ACE_1.cfg, AFC_Hardware-ACE.cfg
+- Users can now install AFC_ACE via standard installation workflow
+
 **Feature: Precise Buffer Zone Positioning Using Reverse Homing**
 - Added `precise_buffer_positioning()` method to AFC_ACE class
 - Uses reverse homing technique for ±1mm positioning accuracy
