@@ -283,6 +283,17 @@ class AFC_ACE(afcBoxTurtle):
         """
         return self.move_to_position(lane, self.POSITION_LOAD)
 
+    def set_selector_position(self, lane, position):
+        """
+        Set selector to specific position for a lane.
+        Used by tension assist system to control selector position based on assist mode.
+
+        :param lane: Lane object
+        :param position: Target position (FREE=0, LOAD=1, UNLOAD=2)
+        :return boolean: Returns True if movement succeeded
+        """
+        return self.move_to_position(lane, position)
+
     def check_runout(self, cur_lane):
         """
         Function to check if runout logic should be triggered

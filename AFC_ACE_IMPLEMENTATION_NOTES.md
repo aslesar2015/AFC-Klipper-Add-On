@@ -245,12 +245,109 @@ Examples for Lane 1 (with lane1_offset=1.5, steps_per_lane=N/A):
 
 ---
 
+## Tension Assist System
+
+### Overview
+AFC_ACE implements a custom tension assist system (`AFC_ACE_tension.py`) designed specifically for the ACE hardware. Unlike TurtleNeck buffer which adjusts rotation_distance, ACE tension assist actively feeds filament when tension is detected.
+
+### Two Assist Modes
+
+1. **Active Mode** (for long tube systems):
+   - Selector stays in LOAD position during printing
+   - When tension sensor triggers → Drive motor feeds `tension_feed_length` mm
+   - Ideal for systems where tubes create significant drag
+   - Maintains constant engagement with drive gear
+
+2. **Passive Mode** (for short tube systems):
+   - Selector moves to FREE position during printing
+   - Filament moves freely without active feeding
+   - No tension sensor monitoring
+   - Minimal resistance, filament pulled by extruder only
+
+### Hub Sensor & Buffer Zone Concept
+
+**Proposed Loading Logic** (not yet implemented):
+1. Load filament to hub sensor (junction of 4 lanes)
+2. Retract `hub_retract_distance` (20mm default) into lane-specific buffer zone
+3. Eliminates need to measure tube lengths manually
+4. Buffer zone provides slack for tension variations
+
+**Benefits:**
+- Auto-calibration: hub sensor provides known reference point
+- Consistent buffer: each lane has same 20mm slack
+- Simpler setup: no manual tube length measurement needed
+
+### Tension Assist Configuration
+
+```ini
+[AFC_ACE_tension ACE_tension1]
+tension_pin: ^!ACE:TENSION1          # Hall sensor pin
+assist_mode: passive                 # 'active' or 'passive'
+tension_feed_length: 10.0            # mm to feed when tension detected (active mode)
+tension_feed_speed: 50.0             # Feed speed in mm/s
+tension_feed_accel: 400.0            # Feed acceleration in mm/s^2
+hub_retract_distance: 20.0           # Buffer zone size (mm)
+debug: False                         # Debug logging
+enable_sensors_in_gui: True          # Show in Mainsail/Fluidd
+```
+
+### How It Works
+
+**Integration with Lane:**
+- Tension assist objects register in `afc.buffers` dict (same as TurtleNeck)
+- Lane references tension assist via `buffer: ACE_tension1` parameter
+- Lane calls `enable_buffer()` when loaded → tension assist activates
+- Lane calls `disable_buffer()` when unloaded → tension assist deactivates
+
+**Active Mode Operation:**
+1. Lane loaded into toolhead
+2. `enable_buffer()` → Selector moves to LOAD position
+3. During printing: tension sensor triggers → callback activated
+4. Drive motor feeds `tension_feed_length` mm
+5. Minimum interval between assists: 0.5 seconds (configurable)
+
+**Passive Mode Operation:**
+1. Lane loaded into toolhead
+2. `enable_buffer()` → Selector moves to FREE position
+3. Tension sensor ignored
+4. Filament moves freely
+
+### Available Commands
+
+```gcode
+# Enable/disable tension assist
+ENABLE_TENSION_ASSIST TENSION=ACE_tension1
+DISABLE_TENSION_ASSIST TENSION=ACE_tension1
+
+# Switch modes
+SET_TENSION_MODE TENSION=ACE_tension1 MODE=active
+SET_TENSION_MODE TENSION=ACE_tension1 MODE=passive
+
+# Query status
+QUERY_TENSION TENSION=ACE_tension1
+```
+
+### File Created
+**File:** `extras/AFC_ACE_tension.py`
+
+**Class:** `AFC_ACE_TensionAssist`
+
+**Key Methods:**
+- `tension_callback()`: Responds to tension sensor triggers
+- `do_tension_assist()`: Executes assist move via Drive motor
+- `enable_buffer()`: Activates assist, sets selector position
+- `disable_buffer()`: Deactivates assist
+- `buffer_status()`: Reports status (for compatibility)
+
+---
+
 ## Known Issues / TODO
 
 ### Not Yet Implemented
-- Hub sensor pin not defined (add when user determines which pin to use)
+- Hub sensor loading logic (hub sensor pin needs definition)
+- Hub sensor retract-to-buffer integration
 - Toolhead sensors (pin_tool_start, pin_tool_end) - user needs to configure
-- Buffer sensors (if user wants to use TurtleNeck buffer)
+- UNLOAD position spool motor control (if using retraction)
 
 ### Position 2 (UNLOAD) Logic
 The UNLOAD position is defined but not fully integrated:
@@ -361,10 +458,11 @@ Initially considered `[output_pin]` for simple on/off control, but switched to `
 ## File Checksums (for verification)
 
 Key files created/modified in this session:
-1. `extras/AFC_ACE.py` - 333 lines, main implementation
-2. `config/mcu/AcePro.cfg` - 38 lines, pinout definitions
-3. `templates/AFC_ACE_1.cfg` - 157 lines, complete configuration
-4. `templates/AFC_Hardware-ACE.cfg` - 95 lines, extruder/buffer template
+1. `extras/AFC_ACE.py` - 357 lines, main implementation with selector positioning
+2. `extras/AFC_ACE_tension.py` - 280 lines, tension assist system
+3. `config/mcu/AcePro.cfg` - 38 lines, pinout definitions
+4. `templates/AFC_ACE_1.cfg` - 221 lines, complete configuration with tension assist
+5. `templates/AFC_Hardware-ACE.cfg` - 95 lines, extruder/buffer template
 
 All files use standard AFC copyright header and GPLv3 license.
 
