@@ -32,6 +32,9 @@ class AFC_ACE_TensionAssist:
         self.enable     = False
         self.current_lane = None
 
+        # Lane name - will be set when lane references this buffer
+        self.lane_name  = config.get("lane", None)
+
         # Tension assist configuration
         self.assist_mode            = config.get("assist_mode", "passive")  # 'active' or 'passive'
         self.tension_feed_length    = config.getfloat("tension_feed_length", 10.0)  # mm to feed when tension detected
@@ -83,10 +86,6 @@ class AFC_ACE_TensionAssist:
 
     def __str__(self):
         return self.name
-
-    def _handle_ready(self):
-        """Handle klippy ready event"""
-        self.min_event_systime = self.reactor.monotonic() + 2.
 
     def tension_callback(self, eventime, state):
         """
@@ -144,12 +143,39 @@ class AFC_ACE_TensionAssist:
         except Exception as e:
             self.logger.error("{} error during tension assist: {}".format(self.name, str(e)))
 
+    def _handle_ready(self):
+        """Handle klippy ready event - find and store reference to our lane"""
+        self.min_event_systime = self.reactor.monotonic() + 2.
+
+        # Find the lane that references this buffer
+        if self.lane_name:
+            try:
+                lane_obj = self.printer.lookup_object(f'AFC_lane {self.lane_name}')
+                self.set_current_lane(lane_obj)
+                self.logger.info(f"{self.name} linked to lane {self.lane_name}")
+            except:
+                self.logger.warning(f"{self.name} could not find lane {self.lane_name}")
+
     def enable_buffer(self):
         """
         Enable tension assist. Called when lane is loaded into toolhead.
         Sets selector position based on assist mode.
+
+        Note: Lane object might not be set yet. If current_lane is None,
+        try to find it from AFC current lane.
         """
         self.enable = True
+
+        # Try to get current lane if not set
+        if self.current_lane is None:
+            try:
+                current_lane_name = self.afc.function.get_current_lane()
+                if current_lane_name:
+                    lane_obj = self.afc.lanes.get(current_lane_name)
+                    if lane_obj and lane_obj.buffer_obj == self:
+                        self.current_lane = lane_obj
+            except:
+                pass
 
         if self.current_lane is None:
             self.logger.warning("{} enable_buffer called but current_lane is None".format(self.name))
