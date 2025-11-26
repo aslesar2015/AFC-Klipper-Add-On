@@ -104,6 +104,7 @@ class AFC_ACE(afcBoxTurtle):
         # Register custom commands
         self.gcode.register_mux_command('HOME_UNIT', "UNIT", self.name, self.cmd_HOME_UNIT)
         self.gcode.register_mux_command('ACE_SET_POSITION', "UNIT", self.name, self.cmd_ACE_SET_POSITION)
+        self.gcode.register_mux_command('ACE_PRECISE_POSITION', "UNIT", self.name, self.cmd_ACE_PRECISE_POSITION)
 
         super().handle_connect()
 
@@ -182,6 +183,45 @@ class AFC_ACE(afcBoxTurtle):
 
         self.move_to_position(lane, position)
         gcmd.respond_info(f"Moved to lane {lane_num}, position {position}")
+
+    def cmd_ACE_PRECISE_POSITION(self, gcmd):
+        """
+        Precisely position filament in buffer zone using reverse homing
+
+        Usage
+        -----
+        `ACE_PRECISE_POSITION UNIT=<unit_name> LANE=<lane_number> [BUFFER=<distance>]`
+
+        LANE: Lane number (1-4)
+        BUFFER: Buffer distance in mm (default 20mm)
+
+        Example:
+        -----
+        ```
+        ACE_PRECISE_POSITION UNIT=ACE_1 LANE=1 BUFFER=20
+        ```
+        """
+        lane_num = gcmd.get_int('LANE', minval=1, maxval=4)
+        buffer_distance = gcmd.get_float('BUFFER', default=20.0, minval=5.0, maxval=100.0)
+
+        # Find lane object
+        lane = None
+        for l in self.lanes.values():
+            if l.index == lane_num:
+                lane = l
+                break
+
+        if lane is None:
+            gcmd.respond_info(f"Lane {lane_num} not found")
+            return
+
+        gcmd.respond_info(f"Starting precise buffer positioning for lane {lane_num}")
+        success = self.precise_buffer_positioning(lane, buffer_distance)
+
+        if success:
+            gcmd.respond_info(f"Precise positioning complete - filament at {buffer_distance}mm before hub sensor")
+        else:
+            gcmd.respond_info("Precise positioning failed - check logs for details")
 
     def return_to_home(self, prep=False):
         """
@@ -368,6 +408,69 @@ class AFC_ACE(afcBoxTurtle):
         """
         self.logger.info(f"ACE: {lane.name} unloaded from toolhead")
         self.lane_unloaded(lane)
+
+    def precise_buffer_positioning(self, lane, buffer_distance=20):
+        """
+        Precisely position filament in buffer zone using reverse homing.
+
+        This method provides accurate positioning independent of dist_hub accuracy.
+        Instead of relying on dist_hub to stop exactly at the right point, we:
+        1. Let AFC load to hub sensor (existing logic)
+        2. Reverse until hub sensor releases (precise edge detection)
+        3. Retract exact buffer_distance to create buffer zone
+
+        This ensures filament is always at exactly buffer_distance mm before hub sensor,
+        regardless of dist_hub calibration accuracy.
+
+        :param lane: Lane object to position
+        :param buffer_distance: Distance in mm before hub sensor (default 20mm)
+        :return: True if positioning succeeded, False on error
+        """
+        hub = lane.hub_obj
+
+        # Verify hub sensor is triggered (filament reached hub)
+        if not hub.state:
+            self.logger.error(f"ACE: Hub sensor not triggered for {lane.name}, cannot do precise positioning")
+            return False
+
+        self.logger.info(f"ACE: Starting precise buffer positioning for {lane.name}")
+
+        # Step 1: Reverse homing - retract until hub sensor releases
+        # This gives us precise edge detection
+        retract_step = 1  # 1mm per step for accuracy
+        max_retract = 50  # Safety limit: max 50mm backward
+        retracted = 0
+
+        self.logger.debug(f"ACE: Reverse homing to find hub sensor edge...")
+        while hub.state and retracted < max_retract:
+            lane.move_advanced(-retract_step, lane.SpeedMode.SHORT)
+            retracted += retract_step
+            self.logger.debug(f"ACE: Retracted {retracted}mm, hub sensor: {hub.state}")
+
+        if hub.state:
+            # Still triggered after max_retract - something wrong
+            self.logger.error(f"ACE: Hub sensor still triggered after {max_retract}mm retract!")
+            return False
+
+        self.logger.info(f"ACE: Hub sensor edge found at {retracted}mm from trigger point")
+
+        # Step 2: Now filament tip is exactly at front edge of hub sensor
+        # Retract buffer_distance to create buffer zone
+        self.logger.info(f"ACE: Retracting {buffer_distance}mm to create buffer zone")
+
+        # Move selector to UNLOAD position for controlled retraction
+        self.move_to_position(lane, self.POSITION_UNLOAD)
+
+        # Retract to buffer zone
+        lane.move_advanced(-buffer_distance, lane.SpeedMode.SHORT)
+
+        # Verify hub sensor is NOT triggered (we're in buffer zone)
+        if hub.state:
+            self.logger.warning(f"ACE: Hub sensor still triggered after buffer retract - check calibration!")
+            return False
+
+        self.logger.info(f"ACE: Buffer zone created successfully - filament at {buffer_distance}mm before hub sensor")
+        return True
 
     def set_individual_led(self, lane_index, state, brightness=1.0):
         """

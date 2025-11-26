@@ -59,13 +59,15 @@ Added support for a custom AFC system called "AFC_ACE" to the AFC-Klipper-Add-On
 - `select_lane()`: Convenience method - moves to LOAD position
 - `lane_loaded/unloaded/loading()`: LED control callbacks
 - `lane_tool_loaded()`: Called when lane fully loaded into toolhead
-- `lane_tool_unloading()`: **NEW** - Moves selector to UNLOAD position when unloading starts
+- `lane_tool_unloading()`: Moves selector to UNLOAD position when unloading starts
 - `lane_tool_unloaded()`: Called after lane unloaded from toolhead
+- `precise_buffer_positioning()`: **NEW** - Precise buffer zone positioning using reverse homing
 - `set_individual_led()`: Controls white LEDs via Klipper LED objects
 
 **Custom Commands:**
 - `HOME_UNIT UNIT=<name>`: Home selector to endstop
 - `ACE_SET_POSITION UNIT=<name> LANE=<1-4> POSITION=<0-2>`: Manual positioning for testing
+- `ACE_PRECISE_POSITION UNIT=<name> LANE=<1-4> [BUFFER=<distance>]`: Precise buffer zone positioning using reverse homing
 
 **Configuration Parameters:**
 - `drive_stepper`: Name of shared drive motor AFC_stepper
@@ -755,6 +757,51 @@ Command: LANE_UNLOAD LANE=lane1
 
 ---
 
+## Precise Buffer Zone Positioning
+
+### Problem Statement
+Standard AFC hub sensor loading has positioning uncertainty:
+- `dist_hub` parameter is "blind" movement - moves distance, THEN checks sensor
+- After movement completes, filament tip could be 0-50mm past hub sensor
+- This makes buffer zone positioning unpredictable
+- Problem: Setting `dist_hub` too large causes overshoot; too small causes retry loops
+
+### Solution: Reverse Homing Technique
+
+The `precise_buffer_positioning()` method solves this with reverse homing:
+
+**Process:**
+1. **Initial Load:** AFC loads filament to hub sensor using standard logic (dist_hub)
+2. **Reverse Homing:** Retract in 1mm steps until hub sensor releases
+   - This finds the exact front edge of the hub sensor
+   - Accuracy: ±1mm (limited by step size)
+3. **Buffer Zone Creation:** Retract exact buffer_distance (default 20mm)
+   - Now filament tip is precisely 20mm before hub sensor
+   - Independent of dist_hub calibration accuracy
+
+**Advantages:**
+- ✅ Precise positioning (±1mm) regardless of dist_hub value
+- ✅ No dependency on dist_hub calibration accuracy
+- ✅ Consistent buffer zone every time
+- ✅ Eliminates positioning uncertainty
+- ✅ Can set dist_hub conservatively (smaller than actual) for safety
+
+**Usage:**
+```gcode
+# Manual testing/calibration
+ACE_PRECISE_POSITION UNIT=ACE_1 LANE=1 BUFFER=20
+
+# Can be integrated into lane pre-loading workflow (future enhancement)
+```
+
+**Implementation Notes:**
+- Safety limit: Max 50mm retract during reverse homing
+- Uses UNLOAD position for controlled retraction
+- Verifies hub sensor state before/after
+- Comprehensive logging for debugging
+
+---
+
 ## Known Issues / TODO
 
 ### Not Yet Implemented
@@ -888,8 +935,8 @@ Initially considered `[output_pin]` for simple on/off control, but switched to `
 ## File Checksums (for verification)
 
 Key files created/modified in this session:
-1. `extras/AFC_ACE.py` - 396 lines, main implementation with selector positioning **[UPDATED: Added lane_tool_unloading()]**
-2. `extras/AFC.py` - 1911 lines, modified to call lane_tool_unloading() during BOTH TOOL_UNLOAD and LANE_UNLOAD **[UPDATED: Added UNLOAD support]**
+1. `extras/AFC_ACE.py` - 499 lines, main implementation **[UPDATED: Added precise_buffer_positioning()]**
+2. `extras/AFC.py` - 1911 lines, modified to call lane_tool_unloading() during BOTH TOOL_UNLOAD and LANE_UNLOAD
 3. `extras/AFC_ACE_tension.py` - 280 lines, tension assist system
 4. `config/mcu/AcePro.cfg` - 38 lines, pinout definitions
 5. `templates/AFC_ACE_1.cfg` - 221 lines, complete configuration with tension assist
@@ -897,7 +944,19 @@ Key files created/modified in this session:
 
 All files use standard AFC copyright header and GPLv3 license.
 
-### Latest Changes (2025-11-26)
+### Latest Changes (2025-11-27)
+**Feature: Precise Buffer Zone Positioning Using Reverse Homing**
+- Added `precise_buffer_positioning()` method to AFC_ACE class
+- Uses reverse homing technique for ±1mm positioning accuracy
+- Independent of `dist_hub` calibration accuracy
+- Process:
+  1. Retract 1mm steps until hub sensor releases (finds exact sensor edge)
+  2. Retract exact buffer_distance (default 20mm) to create buffer zone
+- G-code command: `ACE_PRECISE_POSITION UNIT=<name> LANE=<1-4> [BUFFER=<distance>]`
+- Solves hub sensor positioning uncertainty problem
+- Ensures filament is always at exact distance before hub sensor
+
+**Previous Changes (2025-11-26):**
 **Feature: Active UNLOAD Position Support for Lane Ejection**
 - Added `lane_tool_unloading()` method to AFC_ACE class
 - Selector moves to UNLOAD position during `LANE_UNLOAD` (full ejection for spool change)
