@@ -968,6 +968,12 @@ class afc:
             # once user removes filament lanes status will go to None
             cur_lane.status = AFCLaneState.EJECTING
             self.save_vars()
+
+            # Move selector to UNLOAD position for active retraction (ACE-specific)
+            # Check if unit implements lane_tool_unloading (for full lane ejection)
+            if hasattr(cur_lane.unit_obj, 'lane_tool_unloading'):
+                cur_lane.unit_obj.lane_tool_unloading(cur_lane)
+
             if cur_lane.loaded_to_hub:
                 cur_lane.move_advanced(cur_lane.dist_hub * -1, SpeedMode.HUB, assist_active = AssistActive.DYNAMIC)
             cur_lane.loaded_to_hub = False

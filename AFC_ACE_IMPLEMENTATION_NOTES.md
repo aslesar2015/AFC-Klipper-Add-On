@@ -58,6 +58,9 @@ Added support for a custom AFC system called "AFC_ACE" to the AFC-Klipper-Add-On
 - `move_to_position()`: Moves selector to specified lane and position
 - `select_lane()`: Convenience method - moves to LOAD position
 - `lane_loaded/unloaded/loading()`: LED control callbacks
+- `lane_tool_loaded()`: Called when lane fully loaded into toolhead
+- `lane_tool_unloading()`: **NEW** - Moves selector to UNLOAD position when unloading starts
+- `lane_tool_unloaded()`: Called after lane unloaded from toolhead
 - `set_individual_led()`: Controls white LEDs via Klipper LED objects
 
 **Custom Commands:**
@@ -607,17 +610,33 @@ move_dis: 60                             # Movement past hub sensor (mm)
 
 ---
 
-### Toolhead Unloading Process (Brief Overview)
+### Toolhead Unloading Process (Tool Change)
 
-The reverse process when changing tools or ending print:
+The reverse process when changing tools during print - **selector position does NOT change**:
 
-1. **Retract from nozzle** → retract `tool_stn` distance
-2. **Retract through extruder** → use `tool_unload_speed` until sensors clear
-3. **Additional retraction** (if configured) → `tool_sensor_after_extruder` distance
-4. **Unsync from extruder** → lane motor independent again
-5. **Retract through bowden** → pull back `afc_unload_bowden_length`
-6. **Retract to buffer zone** → back to 20mm before hub sensor
-7. **Update status** → lane unloaded, disable buffer
+1. **Disable buffer/tension assist** → stop monitoring tension sensors
+2. **Form tip** (if configured) → run tip shaping macro
+3. **Retract from nozzle** → retract `tool_stn` distance
+   - **Both motors synchronized:** Extruder motor + Lane (Drive) motor
+   - Both pull together - no gap for filament to get stuck
+4. **Retract through extruder** → use `tool_unload_speed` until sensors clear
+   - **Still synchronized** - both motors work together
+5. **Additional retraction** (if configured) → `tool_sensor_after_extruder` distance
+6. **Unsync from extruder** → lane motor independent again
+7. **Retract through bowden** → pull back `afc_unload_bowden_length`
+   - Only Lane (Drive) motor working now
+   - Selector stays in current position (HOME or FREE)
+8. **Retract past hub sensor** → clear hub completely
+9. **Retract to buffer zone** → stop 20mm before hub sensor
+   - **Filament stays in buffer zone** - ready for quick reload
+10. **Selector returns to HOME** → `return_to_home()` called
+11. **Update status** → lane unloaded, LED off
+
+**Key Point:**
+During TOOL_UNLOAD for tool change, filament only goes back to buffer zone (20mm before hub). The selector does NOT move to UNLOAD position because:
+- Motors are synchronized during critical retract phase
+- No risk of filament getting stuck
+- Faster tool changes (no extra selector movement needed)
 
 ---
 
@@ -678,11 +697,14 @@ Tool Change - Switch from Slot #1 to Slot #3 (T2):
 
   Step 1 - TOOL_UNLOAD(Slot #1):
    ├─ Disable buffer/tension assist
-   ├─ Retract from nozzle (tool_stn distance)
-   ├─ Retract through extruder (until sensors clear)
+   ├─ Form tip (if configured)
+   ├─ Retract from nozzle (Extruder + Lane motors SYNCED)
+   ├─ Retract through extruder (STILL SYNCED - both motors work together)
    ├─ Unsync from extruder
-   ├─ Retract through bowden tube
-   └─ Retract to hub waiting zone (20mm before hub)
+   ├─ Retract through bowden tube (only Lane motor, selector in HOME/FREE)
+   ├─ Retract past hub sensor
+   ├─ Retract to hub waiting zone (20mm before hub)
+   ├─ Selector → HOME position
    └─ Status: Slot #1 back in waiting zone, toolhead empty
 
   Step 2 - TOOL_LOAD(Slot #3):
@@ -704,11 +726,26 @@ Print End - Unload from toolhead:
    └─ Status: All slots in waiting zones, toolhead empty
 
 ═══════════════════════════════════════════════════════════════
-POST-PRINT (Optional)
+POST-PRINT (Optional) - Full Lane Ejection
 ═══════════════════════════════════════════════════════════════
 
 Lane Unloading - Remove filaments for spool change:
-   └─ Unload slots from waiting zones as needed
+
+Command: LANE_UNLOAD LANE=lane1
+
+  Full Lane Ejection Process:
+   ├─ **Selector → UNLOAD position (11.5mm for Lane 1)** ✅
+   ├─ Retract from buffer zone (20mm before hub)
+   ├─ Retract past hub sensor
+   ├─ Retract through lane-specific tube
+   ├─ Retract until PREP sensor clears (filament fully out)
+   ├─ **Drive motor actively pulls filament via UNLOAD position**
+   ├─ Selector → HOME position
+   └─ Status: Lane empty, ready for new spool
+
+**Key Difference from TOOL_UNLOAD:**
+- LANE_UNLOAD = Full ejection from system (uses UNLOAD position)
+- TOOL_UNLOAD = Retract to buffer zone only (NO UNLOAD position)
 ```
 
 ---
@@ -721,12 +758,26 @@ Lane Unloading - Remove filaments for spool change:
 - Complete integration of hub sensor with buffer zone retract
 - Spool motor control (if using active spool rotation)
 
-### Position 2 (UNLOAD) Current Use
-The UNLOAD position is **actively used** in lane pre-loading:
+### Position 2 (UNLOAD) Active Use ✅
+The UNLOAD position is **actively used** in TWO scenarios:
+
+**1. Lane Pre-loading (Buffer Zone Creation):**
 - Used during the 20mm retract operation to create buffer zone
 - Selector physically moves to UNLOAD position (11.5mm for Lane 1)
 - Drive motor retracts filament while selector is in UNLOAD position
-- **Future enhancement:** Could add spool motor rotation during UNLOAD for active retraction
+
+**2. Lane Ejection (Full Unload for Spool Change):** ✅ **IMPLEMENTED**
+- When `LANE_UNLOAD` is called, selector moves to UNLOAD position
+- Drive motor actively retracts filament from buffer zone back through lane tube
+- UNLOAD position engages filament with drive gear for active retraction
+- This provides better retraction control and reduces motor load
+- After unload completes, selector returns to HOME position
+
+**IMPORTANT:** UNLOAD position is **NOT** used during `TOOL_UNLOAD` (tool change):
+- During tool change, filament only retracts to buffer zone (20mm before hub)
+- Extruder and Lane motors are synchronized during retract from toolhead
+- No risk of filament getting stuck - both motors work together
+- Selector stays in HOME or FREE position (depending on tension assist mode)
 
 ### Potential Improvements
 1. Add automatic LED blinking during loading (currently just dims)
@@ -832,13 +883,26 @@ Initially considered `[output_pin]` for simple on/off control, but switched to `
 ## File Checksums (for verification)
 
 Key files created/modified in this session:
-1. `extras/AFC_ACE.py` - 357 lines, main implementation with selector positioning
-2. `extras/AFC_ACE_tension.py` - 280 lines, tension assist system
-3. `config/mcu/AcePro.cfg` - 38 lines, pinout definitions
-4. `templates/AFC_ACE_1.cfg` - 221 lines, complete configuration with tension assist
-5. `templates/AFC_Hardware-ACE.cfg` - 95 lines, extruder/buffer template
+1. `extras/AFC_ACE.py` - 391 lines, main implementation with selector positioning **[UPDATED: Added lane_tool_unloading()]**
+2. `extras/AFC.py` - 1905 lines, modified to call lane_tool_unloading() during LANE_UNLOAD **[UPDATED: Added UNLOAD support for ejection]**
+3. `extras/AFC_ACE_tension.py` - 280 lines, tension assist system
+4. `config/mcu/AcePro.cfg` - 38 lines, pinout definitions
+5. `templates/AFC_ACE_1.cfg` - 221 lines, complete configuration with tension assist
+6. `templates/AFC_Hardware-ACE.cfg` - 95 lines, extruder/buffer template
 
 All files use standard AFC copyright header and GPLv3 license.
+
+### Latest Changes (2025-11-26)
+**Feature: Active UNLOAD Position Support for Lane Ejection**
+- Added `lane_tool_unloading()` method to AFC_ACE class
+- Selector moves to UNLOAD position during `LANE_UNLOAD` (full ejection for spool change)
+- Provides active retraction assistance when removing filament from system
+- Improved motor efficiency and retraction reliability
+
+**Important Clarification:**
+- `TOOL_UNLOAD` (tool change): Does NOT use UNLOAD position - motors are synced
+- `LANE_UNLOAD` (spool ejection): DOES use UNLOAD position - active retraction needed
+- This design prevents unnecessary selector movements during fast tool changes
 
 ---
 

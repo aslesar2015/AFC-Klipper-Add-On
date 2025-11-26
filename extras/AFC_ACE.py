@@ -329,6 +329,41 @@ class AFC_ACE(afcBoxTurtle):
         # Set LED to dim state during loading
         self.set_individual_led(lane.index, True, brightness=0.3)
 
+    def lane_tool_loaded(self, lane):
+        """
+        Called when lane is fully loaded into toolhead
+        This is called after TOOL_LOAD completes successfully
+
+        :param lane: Lane object that was loaded
+        """
+        self.logger.info(f"ACE: {lane.name} loaded into toolhead")
+        self.lane_loaded(lane)
+
+    def lane_tool_unloading(self, lane):
+        """
+        Called when LANE_UNLOAD starts (full ejection for spool change)
+        NOT called during TOOL_UNLOAD (tool change - motors are synced)
+
+        Move selector to UNLOAD position for active retraction from buffer zone
+        back through lane tube to eject filament completely
+
+        :param lane: Lane object being ejected
+        """
+        self.logger.info(f"ACE: Moving selector to UNLOAD position for lane ejection of {lane.name}")
+        self.move_to_position(lane, self.POSITION_UNLOAD)
+        # Set LED to dim state during ejection
+        self.set_individual_led(lane.index, True, brightness=0.3)
+
+    def lane_tool_unloaded(self, lane):
+        """
+        Called after UNLOAD is complete
+        Selector will return to HOME position via return_to_home() called by AFC core
+
+        :param lane: Lane object that was unloaded
+        """
+        self.logger.info(f"ACE: {lane.name} unloaded from toolhead")
+        self.lane_unloaded(lane)
+
     def set_individual_led(self, lane_index, state, brightness=1.0):
         """
         Set individual LED state (on/off) for a specific lane
