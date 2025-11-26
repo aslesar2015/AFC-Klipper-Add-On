@@ -18,6 +18,43 @@ class AFC_ACE_TensionAssist:
     Two modes of operation:
     - Active: Selector stays in LOAD position, feeds filament when tension detected
     - Passive: Selector in FREE position, filament moves freely without assist
+
+    AFC_ACE Operation Phases:
+    -------------------------
+
+    PREPARATION PHASE (Подготовка к печати):
+    - Purpose: Load/unload filaments into/from hub waiting zone
+    - Operations: Lane pre-loading, lane unloading
+    - Sensors: PREP sensors, Hub sensor
+    - TENSION sensors: NOT active (not monitored)
+
+    PRINTING PHASE (Печать):
+    - Purpose: Move filaments between hub waiting zone and toolhead
+    - Operations: Initial tool load, tool changes
+    - Sensors: Toolhead sensors (pin_tool_start, pin_tool_end)
+    - TENSION sensors: Active ONLY after toolhead loading complete
+
+    When Tension Sensors Are Active:
+    ---------------------------------
+    Tension sensors (TENSION1-4) activate ONLY during PRINTING PHASE:
+
+    1. Preparation Phase (lane pre-loading):
+       → TENSION sensors NOT monitored
+       → Only PREP and Hub sensors used
+
+    2. Tool Load/Change (hub → toolhead):
+       → TENSION sensors NOT monitored yet
+       → Only toolhead sensors used
+
+    3. Printing (after successful toolhead load):
+       → enable_buffer() called → tension assist ACTIVATES
+       → TENSION sensors NOW monitored
+       → Active mode: feeds filament when slack detected
+       → Passive mode: sensors ignored, free movement
+
+    ACE 5-Sensor System:
+    - TENSION1-4 (individual): Trigger when filament has MINIMAL tension (slack)
+    - TENSION_COMMON (shared): Triggers at MAXIMUM tension (safety limit)
     """
 
     def __init__(self, config):

@@ -341,25 +341,399 @@ QUERY_TENSION TENSION=ACE_tension1
 
 ---
 
+## AFC_ACE Operation Modes
+
+AFC_ACE has **TWO distinct operational phases** with different purposes:
+
+### 1. Preparation Phase (Подготовка к печати)
+**Purpose:** Load/unload filaments into/from hub waiting zone
+
+**Operations:**
+- **Lane Pre-loading**: User inserts filament → loads to hub → 20mm retract into buffer zone
+- **Lane Unloading**: Unload filament from hub waiting zone (for spool replacement)
+
+**Key Point:** Filament stays in buffer zone (20mm before hub), NOT in toolhead
+
+### 2. Printing Phase (Печать)
+**Purpose:** Load filament from hub waiting zone into toolhead for printing
+
+**Operations:**
+- **Initial Tool Load**: Load filament from hub zone into empty toolhead (print start)
+- **Tool Change**: Unload current filament from toolhead → Load new filament into toolhead
+
+**Key Point:** These operations move filament between hub waiting zone and toolhead
+
+**Example Tool Change:**
+```
+Current state: Slot #2 loaded in toolhead
+G-code command: Load Slot #4
+Process:
+  1. Unload Slot #2 from toolhead → back to hub waiting zone
+  2. Load Slot #4 from hub waiting zone → into toolhead
+Result: Slot #4 now in toolhead, ready to print
+```
+
+---
+
+## Preparation Phase Operations
+
+### Lane Pre-loading (Загрузка в зону ожидания)
+
+This is the initial filament loading into a lane when user inserts filament. This process loads filament into the hub waiting zone and is triggered by the **PREP sensor** detecting filament insertion.
+
+#### Step-by-Step Process:
+
+1. **Initial State**
+   - Selector in HOME position (all lanes idle)
+   - User manually inserts filament into lane (e.g., Lane 1)
+   - Filament reaches PREP1 sensor → sensor triggers
+
+2. **Selector Positioning**
+   - System moves selector to LOAD position for Lane 1
+   - Position calculation: `lane1_offset + (lane_index-1)*steps_per_lane + 0mm` (LOAD offset = 0)
+   - For Lane 1: moves to 1.5mm from home
+
+3. **User Assists Drive Catch**
+   - User continues pushing filament manually
+   - Drive motor rotates to catch filament
+   - Drive mechanism grabs filament and begins feeding
+
+4. **Feed to Hub Sensor**
+   - Drive motor feeds filament toward hub
+   - Distance: `dist_hub` (approximately 100mm, needs calibration per lane)
+   - Filament travels through lane-specific tube to junction hub
+   - Hub sensor triggers when filament reaches hub junction
+
+5. **Retract to Buffer Zone (uses UNLOAD position!)**
+   - **Selector moves to UNLOAD position**
+   - Position calculation: `lane1_offset + (lane_index-1)*steps_per_lane + 10mm` (UNLOAD offset = 10mm)
+   - For Lane 1: moves to 11.5mm from home
+   - Drive motor retracts filament **20mm backward** (`hub_retract_distance`)
+   - This creates a buffer zone in the lane-specific tube
+   - Filament tip is now 20mm before hub sensor
+
+6. **Final Position (mode-dependent)**
+   - **If using tension assist in Active mode:**
+     - Selector moves to LOAD position (ready to feed during print)
+   - **If using tension assist in Passive mode:**
+     - Selector moves to FREE position (filament can move freely)
+   - **If no tension assist:**
+     - Selector can stay in LOAD or move to FREE
+
+7. **Loading Complete**
+   - Filament is loaded into lane's buffer zone (20mm before hub)
+   - Lane status: `loaded_to_hub = True`
+   - **Filament is NOT in toolhead yet** - that's a separate operation
+   - Selector disables stepper motor
+
+#### Key Insights:
+
+- **TENSION sensors are NOT used during pre-loading** - only PREP and Hub sensors
+- **UNLOAD position has a critical role**: It's used for the 20mm retract operation to create buffer zone
+- **Buffer zone concept**: The 20mm retract creates slack for tension variations during printing
+- **User participation required**: User must manually push filament initially until Drive catches it
+
+#### Why 20mm Retract?
+
+The 20mm retract (buffer zone) serves multiple purposes:
+1. **Tension management**: Provides slack for filament expansion/contraction
+2. **Sensor clearance**: Ensures hub sensor is not continuously triggered
+3. **Consistent reference**: All lanes have same buffer distance from hub
+4. **Tension assist activation**: In active mode, tension sensors trigger when buffer depletes
+
+---
+
+## Printing Phase Operations
+
+### Tool Loading and Tool Change
+
+These operations are triggered by **G-code commands from slicer** (e.g., `T0`, `T1`, `T2`, `T3`). They move filament between the hub waiting zone and toolhead.
+
+#### Two Scenarios:
+
+**1. Initial Tool Load** (empty toolhead):
+- Start of print
+- Load specified filament from hub waiting zone into toolhead
+- No unload needed
+
+**2. Tool Change** (toolhead already loaded):
+- Multi-color prints or manual tool change
+- **First:** Unload current filament from toolhead → back to hub waiting zone
+- **Then:** Load new filament from hub waiting zone → into toolhead
+
+**Example:**
+```
+Scenario: Tool Change during print
+Current: Slot #2 loaded in toolhead
+Command: T3 (Load Slot #4)
+Process:
+  Step 1: TOOL_UNLOAD(Slot #2)
+    - Retract from nozzle
+    - Retract through bowden tube
+    - Retract to hub waiting zone (20mm before hub)
+    - Status: Slot #2 in waiting zone, toolhead empty
+
+  Step 2: TOOL_LOAD(Slot #4)
+    - Load from hub waiting zone
+    - Feed through bowden tube
+    - Load into toolhead sensors
+    - Load to nozzle
+    - Status: Slot #4 in toolhead, ready to print
+```
+
+#### When These Operations Happen:
+- Start of print (initial tool load only)
+- Tool change during multi-color prints (unload + load)
+- Manual load/change commands from user
+
+#### Step-by-Step Process (from AFC.py `TOOL_LOAD()` method):
+
+1. **Pre-checks**
+   ```python
+   # Check if lane is ready and hub is clear
+   if not (cur_lane.load_state and not cur_hub.state):
+       return False
+
+   # Check printer is in absolute mode
+   # Set lane status to TOOL_LOADING
+   # Activate loading LED (dimmed)
+   ```
+
+2. **Heat Toolhead (if needed)**
+   - Check current extruder temperature
+   - If below minimum for material type, heat and wait
+   - Required before filament can enter hot end
+
+3. **Verify Filament at Hub** (if not already there)
+   ```python
+   if not cur_lane.loaded_to_hub:
+       # Load filament to hub first (uses dist_hub distance)
+       cur_lane.move_advanced(cur_lane.dist_hub, SpeedMode.HUB)
+       cur_lane.loaded_to_hub = True
+   ```
+
+4. **Move Past Hub Sensor**
+   - Push filament `cur_hub.move_dis` (typically 60mm) past hub sensor
+   - Ensures filament fully enters common bowden tube
+   - Verify hub sensor triggers (error if not reached after 20 attempts)
+
+5. **Feed Through Bowden Tube**
+   ```python
+   # Long move through bowden tube from hub to toolhead
+   cur_lane.move_advanced(cur_hub.afc_bowden_length, SpeedMode.LONG, assist_active=YES)
+   # Distance: afc_bowden_length (e.g., 1750mm)
+   # Speed: long_moves_speed (e.g., 150mm/s)
+   # Assist: Buffer/tension assist active during this move
+   ```
+
+6. **Reach Toolhead Pre-Sensor (pin_tool_start)**
+   ```python
+   # Keep moving in short increments until tool_start triggers
+   while not cur_extruder.tool_start_state:
+       cur_lane.move(cur_lane.short_move_dis, cur_extruder.tool_load_speed, accel)
+       # Error after excessive attempts (failed to reach sensor)
+
+   # Sensor triggered: filament reached entrance to extruder gears
+   ```
+
+7. **Synchronize with Extruder**
+   ```python
+   cur_lane.sync_to_extruder()
+   # AFC lane stepper now synced with toolhead extruder
+   # Both motors will move together
+   ```
+
+8. **Load Through Extruder Gears (pin_tool_end, if configured)**
+   ```python
+   if cur_extruder.tool_end:  # Post-extruder sensor exists
+       while not cur_extruder.tool_end_state:
+           # Move both lane motor AND extruder together
+           self.move_e_pos(cur_lane.short_move_dis, cur_extruder.tool_load_speed)
+           # Continue until post-extruder sensor triggers
+
+       # Filament successfully passed through extruder gears
+   ```
+
+9. **Load to Nozzle Tip**
+   ```python
+   # Final push: sensor to nozzle tip distance
+   self.move_e_pos(cur_extruder.tool_stn, cur_extruder.tool_load_speed)
+   # Distance: tool_stn (e.g., 45mm from tool_end sensor to nozzle)
+   # Filament now at nozzle tip, ready to print
+   ```
+
+10. **Buffer Reset (if using buffer system)**
+    ```python
+    if cur_extruder.tool_start == "buffer":
+        # Retract to reset buffer to neutral position
+        while buffer_advance_triggered:
+            cur_lane.move(short_move_dis * -1, SpeedMode.SHORT)
+        # Buffer now in neutral state
+    ```
+
+11. **Final Status Update**
+    ```python
+    cur_lane.set_loaded()              # Mark lane as loaded
+    cur_lane.enable_buffer()           # Enable tension assist/buffer
+    cur_lane.unit_obj.lane_tool_loaded(cur_lane)  # Update LED
+
+    # If poop/purge configured, run purge sequence
+    ```
+
+#### Key Insights:
+
+- **Toolhead loading is completely separate from lane pre-loading**
+- **Two toolhead sensors** (if configured):
+  - `pin_tool_start`: Before extruder gears (detects filament arrival)
+  - `pin_tool_end`: After extruder gears (confirms successful loading)
+- **Synchronization**: Lane motor syncs with extruder during final loading phase
+- **Buffer/Tension assist**: Activated after successful toolhead loading
+- **Error handling**: Multiple checkpoints with retry logic and user guidance
+
+#### Configuration Parameters:
+
+```ini
+[AFC_extruder extruder]
+pin_tool_start: ^!<sensor_pin>           # Pre-extruder sensor
+pin_tool_end: ^!<sensor_pin>             # Post-extruder sensor (optional)
+tool_stn: 45                             # Distance from sensor to nozzle (mm)
+tool_load_speed: 10                      # Loading speed (mm/s)
+tool_unload_speed: 10                    # Unloading speed (mm/s)
+
+[AFC_hub ACE_HUB_1]
+afc_bowden_length: 1750                  # Hub to toolhead distance (mm)
+move_dis: 60                             # Movement past hub sensor (mm)
+```
+
+---
+
+### Toolhead Unloading Process (Brief Overview)
+
+The reverse process when changing tools or ending print:
+
+1. **Retract from nozzle** → retract `tool_stn` distance
+2. **Retract through extruder** → use `tool_unload_speed` until sensors clear
+3. **Additional retraction** (if configured) → `tool_sensor_after_extruder` distance
+4. **Unsync from extruder** → lane motor independent again
+5. **Retract through bowden** → pull back `afc_unload_bowden_length`
+6. **Retract to buffer zone** → back to 20mm before hub sensor
+7. **Update status** → lane unloaded, disable buffer
+
+---
+
+### Complete Operation Workflow
+
+**Full workflow from empty spool to multi-color printing:**
+
+```
+═══════════════════════════════════════════════════════════════
+PREPARATION PHASE (Подготовка к печати)
+═══════════════════════════════════════════════════════════════
+
+Lane Pre-loading - Load all spools into hub waiting zone:
+
+Lane 1 Pre-loading:
+   ├─ User inserts filament → PREP1 sensor triggers
+   ├─ Selector → Lane 1 LOAD position (1.5mm)
+   ├─ User pushes, Drive catches filament
+   ├─ Feed to hub sensor (dist_hub ~100mm)
+   ├─ Selector → UNLOAD position (11.5mm)
+   ├─ Retract 20mm (create buffer zone)
+   ├─ Selector → final position (LOAD/FREE based on mode)
+   └─ Status: Slot #1 in waiting zone (loaded_to_hub = True)
+
+Lane 2 Pre-loading:
+   └─ Same process for Slot #2 → waiting zone
+
+Lane 3 Pre-loading:
+   └─ Same process for Slot #3 → waiting zone
+
+Lane 4 Pre-loading:
+   └─ Same process for Slot #4 → waiting zone
+
+Result: All 4 slots loaded in hub waiting zones, ready for printing
+
+═══════════════════════════════════════════════════════════════
+PRINTING PHASE (Печать)
+═══════════════════════════════════════════════════════════════
+
+Print Start - Initial Tool Load (T0):
+   ├─ Heat toolhead (if needed)
+   ├─ Verify Slot #1 at hub waiting zone
+   ├─ Push past hub sensor (move_dis)
+   ├─ Feed through bowden (afc_bowden_length)
+   ├─ Reach tool_start sensor
+   ├─ Sync with extruder
+   ├─ Load through gears → tool_end sensor
+   ├─ Push to nozzle (tool_stn)
+   ├─ Enable buffer/tension assist
+   └─ Status: Slot #1 in toolhead, printing
+
+During Print - Printing with Slot #1:
+   ├─ Tension assist active (if configured)
+   ├─ Active mode: feeds on slack detection
+   └─ Passive mode: free movement
+
+Tool Change - Switch from Slot #1 to Slot #3 (T2):
+
+  Step 1 - TOOL_UNLOAD(Slot #1):
+   ├─ Disable buffer/tension assist
+   ├─ Retract from nozzle (tool_stn distance)
+   ├─ Retract through extruder (until sensors clear)
+   ├─ Unsync from extruder
+   ├─ Retract through bowden tube
+   └─ Retract to hub waiting zone (20mm before hub)
+   └─ Status: Slot #1 back in waiting zone, toolhead empty
+
+  Step 2 - TOOL_LOAD(Slot #3):
+   ├─ Load from hub waiting zone
+   ├─ Push past hub sensor
+   ├─ Feed through bowden tube
+   ├─ Load into toolhead sensors
+   ├─ Sync with extruder
+   ├─ Load to nozzle
+   ├─ Enable buffer/tension assist
+   └─ Status: Slot #3 in toolhead, printing
+
+During Print - Printing with Slot #3:
+   └─ Continue printing with new color...
+
+Print End - Unload from toolhead:
+   ├─ Unload current slot from toolhead
+   ├─ Retract to hub waiting zone
+   └─ Status: All slots in waiting zones, toolhead empty
+
+═══════════════════════════════════════════════════════════════
+POST-PRINT (Optional)
+═══════════════════════════════════════════════════════════════
+
+Lane Unloading - Remove filaments for spool change:
+   └─ Unload slots from waiting zones as needed
+```
+
+---
+
 ## Known Issues / TODO
 
 ### Not Yet Implemented
-- Hub sensor loading logic (hub sensor pin needs definition)
-- Hub sensor retract-to-buffer integration
-- Toolhead sensors (pin_tool_start, pin_tool_end) - user needs to configure
-- UNLOAD position spool motor control (if using retraction)
+- Hub sensor loading logic (hub sensor pin needs definition in config)
+- Toolhead sensors (pin_tool_start, pin_tool_end) - user needs to configure in AFC_Hardware-ACE.cfg
+- Complete integration of hub sensor with buffer zone retract
+- Spool motor control (if using active spool rotation)
 
-### Position 2 (UNLOAD) Logic
-The UNLOAD position is defined but not fully integrated:
-- Selector moves to UNLOAD position
-- **TODO:** Need to add logic to activate spool rotation motors when in UNLOAD position
-- Currently only selector positioning is implemented
+### Position 2 (UNLOAD) Current Use
+The UNLOAD position is **actively used** in lane pre-loading:
+- Used during the 20mm retract operation to create buffer zone
+- Selector physically moves to UNLOAD position (11.5mm for Lane 1)
+- Drive motor retracts filament while selector is in UNLOAD position
+- **Future enhancement:** Could add spool motor rotation during UNLOAD for active retraction
 
 ### Potential Improvements
 1. Add automatic LED blinking during loading (currently just dims)
-2. Implement spool motor control for UNLOAD position
-3. Add tension sensor monitoring logic for runout detection
-4. Consider using common tension sensor for advanced buffer control
+2. Implement spool motor control for active retraction in UNLOAD position
+3. Add tension sensor monitoring logic for predictive runout detection
+4. Consider using common tension sensor (TENSION_COMMON) for advanced buffer control
+5. Add visual feedback for different loading stages (lane pre-loading vs toolhead loading)
 
 ---
 
