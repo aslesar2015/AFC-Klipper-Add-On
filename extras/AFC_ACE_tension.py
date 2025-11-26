@@ -89,12 +89,25 @@ class AFC_ACE_TensionAssist:
 
     def tension_callback(self, eventime, state):
         """
-        Callback when tension sensor is triggered/untriggered.
+        Callback when individual tension sensor (TENSION1-4) is triggered/untriggered.
 
-        In active mode: triggers filament feeding when tension is detected
+        Sensor logic:
+        - state=True: Filament has MINIMAL tension (slack detected) → need to feed
+        - state=False: Tension returned to normal
+
+        In active mode: triggers filament feeding when tension is minimal (slack)
         In passive mode: does nothing
         """
         self.tension_state = state
+
+        # Check if common tension sensor is triggered (max tension protection)
+        if hasattr(self.current_lane, 'unit_obj') and hasattr(self.current_lane.unit_obj, 'tension_common_state'):
+            if self.current_lane.unit_obj.tension_common_state:
+                # TENSION_COMMON is triggered = maximum tension reached
+                # Do NOT feed more filament - safety protection
+                if self.debug:
+                    self.logger.warning("{} max tension detected (TENSION_COMMON), skipping assist".format(self.name))
+                return
 
         # Only respond in active mode when printer is ready and printing
         if (self.assist_mode == "active" and
@@ -111,7 +124,7 @@ class AFC_ACE_TensionAssist:
                 self.last_assist_time = current_time
 
                 if self.debug:
-                    self.logger.debug("{} tension assist triggered at {}".format(self.name, eventime))
+                    self.logger.debug("{} tension assist triggered at {} (minimal tension detected)".format(self.name, eventime))
 
     def do_tension_assist(self):
         """
@@ -285,7 +298,21 @@ class AFC_ACE_TensionAssist:
         status = "Tension Assist Status for {}:\n".format(self.name)
         status += "  Enabled: {}\n".format(self.enable)
         status += "  Mode: {}\n".format(self.assist_mode)
-        status += "  Tension Sensor State: {}\n".format("TRIGGERED" if self.tension_state else "Clear")
+
+        # Individual tension sensor state
+        tension_desc = "MINIMAL TENSION (needs feed)" if self.tension_state else "Normal"
+        status += "  Individual Sensor ({}): {}\n".format(
+            self.tension_pin if hasattr(self, 'tension_pin') else "N/A",
+            tension_desc
+        )
+
+        # Common tension sensor state (if available)
+        if self.current_lane and hasattr(self.current_lane, 'unit_obj'):
+            common_state = getattr(self.current_lane.unit_obj, 'tension_common_state', None)
+            if common_state is not None:
+                common_desc = "MAX TENSION (safety limit)" if common_state else "Normal"
+                status += "  Common Sensor (TENSION_COMMON): {}\n".format(common_desc)
+
         status += "  Feed Length: {}mm\n".format(self.tension_feed_length)
         status += "  Feed Speed: {}mm/s\n".format(self.tension_feed_speed)
         status += "  Current Lane: {}\n".format(self.current_lane.name if self.current_lane else "None")
