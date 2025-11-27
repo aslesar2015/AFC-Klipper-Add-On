@@ -49,6 +49,7 @@ kick_macro="True"
 wipe_macro="True"
 toolhead_sensor="Sensor"
 toolhead_sensor_pin="Unknown"
+toolhead_sensor_pin_end="Unknown"
 buffer_type="TurtleNeck"
 boxturtle_name="Turtle_1"
 htlf_board_types=("ERB" "MMB_1.1" "MMB_1.0")

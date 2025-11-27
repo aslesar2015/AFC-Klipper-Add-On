@@ -153,9 +153,9 @@ install_afc() {
   update_config_value "${afc_file}" "wipe" "${wipe_macro}"
 
   if [ "$toolhead_sensor" == "Sensor" ]; then
-    update_switch_pin "${afc_config_dir}/AFC_Hardware.cfg" "${toolhead_sensor_pin}"
+    update_switch_pin "${afc_config_dir}/AFC_Hardware.cfg" "${toolhead_sensor_pin}" "${toolhead_sensor_pin_end}"
   elif [ "$toolhead_sensor" == "Ramming" ]; then
-    update_switch_pin "${afc_config_dir}/AFC_Hardware.cfg" "buffer"
+    update_switch_pin "${afc_config_dir}/AFC_Hardware.cfg" "buffer" "None"
   fi
 
   # When using Boxturtle as Installation Type then insert selected buffer configuration

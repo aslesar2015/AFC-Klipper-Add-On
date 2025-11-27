@@ -54,26 +54,38 @@ replace_varfile_path() {
 }
 
 update_switch_pin() {
-  # Function to update the switch pin value in the filament switch sensor section of a configuration file.
+  # Function to update the switch pin values in the filament switch sensor section of a configuration file.
   # Arguments:
   #   $1: file_path - The path to the configuration file.
-  #   $2: new_value - The new value to be assigned to the switch pin.
+  #   $2: pin_start_value - The new value to be assigned to pin_tool_start.
+  #   $3: pin_end_value - The new value to be assigned to pin_tool_end (optional, use "None" to comment out).
 
   local file_path="$1"
-  local new_value="$2"
+  local pin_start_value="$2"
+  local pin_end_value="${3:-Unknown}"
   local temp_file=$(mktemp)
   local in_section=false
 
   # Read the configuration file line by line.
   while IFS= read -r line; do
-    # Check if the line indicates the start of the filament switch sensor section.
+    # Check if the line indicates the start of the AFC_extruder section.
     if [[ "$line" =~ ^\[AFC_extruder\ extruder\]$ ]]; then
       in_section=true
       echo "$line" >> "$temp_file"
-    # If within the section and the line contains the switch pin, update its value.
-    elif $in_section && [[ "$line" =~ ^pin_tool_start: ]]; then
-      echo "pin_tool_start: $new_value" >> "$temp_file"
+    # Check if we've left the AFC_extruder section (new section started).
+    elif $in_section && [[ "$line" =~ ^\[.+\]$ ]]; then
       in_section=false
+      echo "$line" >> "$temp_file"
+    # If within the section and the line contains pin_tool_start, update its value.
+    elif $in_section && [[ "$line" =~ ^pin_tool_start:|^#pin_tool_start: ]]; then
+      echo "pin_tool_start: $pin_start_value" >> "$temp_file"
+    # If within the section and the line contains pin_tool_end, update or comment it.
+    elif $in_section && [[ "$line" =~ ^pin_tool_end:|^#pin_tool_end:|^\^!\<toolhead_sensor_end_pin\> ]]; then
+      if [ "$pin_end_value" == "None" ] || [ "$pin_end_value" == "Unknown" ]; then
+        echo "#pin_tool_end: None" >> "$temp_file"
+      else
+        echo "pin_tool_end: $pin_end_value" >> "$temp_file"
+      fi
     else
       # Write the original line to the temporary file if it does not match the above conditions.
       echo "$line" >> "$temp_file"

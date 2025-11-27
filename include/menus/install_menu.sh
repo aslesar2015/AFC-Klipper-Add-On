@@ -186,9 +186,14 @@ fi
       printf "9. Use a toolhead sensor or ramming with a TN/TN2 buffer? : %s \n" "$toolhead_sensor"
       if [ "$toolhead_sensor" == "Sensor" ]; then
         if [ "$toolhead_sensor_pin" == "Unknown" ]; then
-        printf "A. Toolhead sensor pin: ${RED}%s${RESET} \n" "$toolhead_sensor_pin"
+        printf "A. Toolhead sensor pin (pin_tool_start): ${RED}%s${RESET} \n" "$toolhead_sensor_pin"
       else
-        printf "A. Toolhead sensor pin: %s \n" "$toolhead_sensor_pin"
+        printf "A. Toolhead sensor pin (pin_tool_start): %s \n" "$toolhead_sensor_pin"
+      fi
+        if [ "$toolhead_sensor_pin_end" == "Unknown" ]; then
+        printf "A2. Toolhead sensor pin (pin_tool_end): ${RED}%s${RESET} \n" "$toolhead_sensor_pin_end"
+      else
+        printf "A2. Toolhead sensor pin (pin_tool_end): %s \n" "$toolhead_sensor_pin_end"
       fi
       fi
       case "$installation_type" in
@@ -224,8 +229,16 @@ fi
         toolhead_sensor=$([ "$toolhead_sensor" == "Sensor" ] && echo "Ramming" || echo "Sensor")
         message=$([ "$toolhead_sensor" == "Sensor" ] && echo "Using toolhead sensor" || echo "Using ramming with a TN/TN2 buffer") ;;
       A)
-        read -p "Enter toolhead sensor pin (Example: nhk:gpio13): " toolhead_sensor_pin
-        message="Toolhead sensor pin set to $toolhead_sensor_pin" ;;
+        read -p "Enter toolhead sensor pin_tool_start (Example: nhk:gpio13 or PG10): " toolhead_sensor_pin
+        message="Toolhead sensor pin_tool_start set to $toolhead_sensor_pin" ;;
+      A2)
+        read -p "Enter toolhead sensor pin_tool_end (Example: nhk:gpio14 or PG11, or 'none' to skip): " toolhead_sensor_pin_end
+        if [ "$toolhead_sensor_pin_end" == "none" ] || [ "$toolhead_sensor_pin_end" == "None" ]; then
+          toolhead_sensor_pin_end="None"
+          message="Toolhead sensor pin_tool_end will be commented out (optional sensor)"
+        else
+          message="Toolhead sensor pin_tool_end set to $toolhead_sensor_pin_end"
+        fi ;;
       B)
         buffer_type=$(case "$buffer_type" in "TurtleNeck") echo "TurtleNeckV2";; "TurtleNeckV2") echo "None";; "None"|*) echo "TurtleNeck";; esac)
         message="Buffer Type: $buffer_type" ;;
