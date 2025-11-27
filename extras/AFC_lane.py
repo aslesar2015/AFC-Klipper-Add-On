@@ -117,6 +117,7 @@ class AFCLane:
         self.short_moves_speed  = config.getfloat("short_moves_speed", None)            # Speed in mm/s to move filament when doing short moves. Setting value here overrides values set in unit(AFC_BoxTurtle/NightOwl/etc) section
         self.short_moves_accel  = config.getfloat("short_moves_accel", None)            # Acceleration in mm/s squared when doing short moves. Setting value here overrides values set in unit(AFC_BoxTurtle/NightOwl/etc) section
         self.short_move_dis     = config.getfloat("short_move_dis", None)               # Move distance in mm for failsafe moves. Setting value here overrides values set in unit(AFC_BoxTurtle/NightOwl/etc) section
+        self.coarse_move_increment = config.getfloat("coarse_move_increment", 50)       # Move distance in mm for coarse loading increments when feeding to hub sensor. Used during lane pre-loading to reduce positioning uncertainty. Default 50mm.
         self.max_move_dis       = config.getfloat("max_move_dis", None)                 # Maximum distance to move filament. AFC breaks filament moves over this number into multiple moves. Useful to lower this number if running into timer too close errors when doing long filament moves. Setting value here overrides values set in unit(AFC_BoxTurtle/NightOwl/etc) section
         self.n20_break_delay_time= config.getfloat("n20_break_delay_time", None)        # Time to wait between breaking n20 motors(nSleep/FWD/RWD all 1) and then releasing the break to allow coasting. Setting value here overrides values set in unit(AFC_BoxTurtle/NightOwl/etc) section
 
@@ -670,6 +671,12 @@ class AFCLane:
                         self.afc.error.AFC_error("Cannot load spools while printer is actively moving or homing", False)
                         break
 
+                    # HOOK 1: Allow unit-specific preparation before lane loading starts
+                    if hasattr(self.unit_obj, 'prepare_lane_loading'):
+                        if not self.unit_obj.prepare_lane_loading(self):
+                            self.logger.error(f"Failed to prepare lane loading for {self.name}")
+                            break
+
                     while self.load_state == False and self.prep_state == True and self.load is not None:
                         x += 1
                         self.move(10,500,400)
@@ -694,6 +701,12 @@ class AFCLane:
                     if self.load_to_hub and not self.loaded_to_hub and self.load_state and self.prep_state:
                         self.move(self.dist_hub, self.dist_hub_move_speed, self.dist_hub_move_accel, self.dist_hub > 200)
                         self.loaded_to_hub = True
+
+                    # HOOK 2: Allow unit-specific finalization after hub loading
+                    if hasattr(self.unit_obj, 'finalize_lane_loading'):
+                        if not self.unit_obj.finalize_lane_loading(self):
+                            self.logger.error(f"Failed to finalize lane loading for {self.name}")
+                            break
 
                     self.do_enable(False)
                     if self.load_state == True and self.prep_state == True:

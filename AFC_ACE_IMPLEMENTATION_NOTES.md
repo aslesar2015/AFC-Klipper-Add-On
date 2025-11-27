@@ -386,33 +386,33 @@ Result: Slot #4 now in toolhead, ready to print
 
 This is the initial filament loading into a lane when user inserts filament. This process loads filament into the hub waiting zone and is triggered by the **PREP sensor** detecting filament insertion.
 
-#### Step-by-Step Process:
+#### Step-by-Step Process (OPTIMIZED):
 
 1. **Initial State**
    - Selector in HOME position (all lanes idle)
    - User manually inserts filament into lane (e.g., Lane 1)
    - Filament reaches PREP1 sensor → sensor triggers
 
-2. **Selector Positioning**
-   - System moves selector to LOAD position for Lane 1
-   - Position calculation: `lane1_offset + (lane_index-1)*steps_per_lane + 0mm` (LOAD offset = 0)
-   - For Lane 1: moves to 1.5mm from home
+2. **Selector Positioning to UNLOAD** ⚡ **OPTIMIZATION**
+   - System moves selector **directly to UNLOAD position** for Lane 1
+   - Position calculation: `lane1_offset + (lane_index-1)*steps_per_lane + 10mm` (UNLOAD offset = 10mm)
+   - For Lane 1: moves to 11.5mm from home
+   - **Why UNLOAD first?** Drive motor can feed forward in UNLOAD position
+   - **Benefit:** No need to switch LOAD→UNLOAD later, reduces selector wear and noise
 
 3. **User Assists Drive Catch**
-   - User continues pushing filament manually
+   - User continues pushing filament manually (selector already in UNLOAD)
    - Drive motor rotates to catch filament
    - Drive mechanism grabs filament and begins feeding
 
-4. **Feed to Hub Sensor**
-   - Drive motor feeds filament toward hub
+4. **Feed to Hub Sensor (in UNLOAD position)**
+   - Drive motor feeds filament toward hub **while selector stays in UNLOAD**
    - Distance: `dist_hub` (approximately 100mm, needs calibration per lane)
    - Filament travels through lane-specific tube to junction hub
    - Hub sensor triggers when filament reaches hub junction
 
-5. **Retract to Buffer Zone (uses UNLOAD position!)**
-   - **Selector moves to UNLOAD position**
-   - Position calculation: `lane1_offset + (lane_index-1)*steps_per_lane + 10mm` (UNLOAD offset = 10mm)
-   - For Lane 1: moves to 11.5mm from home
+5. **Retract to Buffer Zone (already in UNLOAD!)**
+   - **Selector already in UNLOAD position** - no movement needed! ✅
    - Drive motor retracts filament **20mm backward** (`hub_retract_distance`)
    - This creates a buffer zone in the lane-specific tube
    - Filament tip is now 20mm before hub sensor
@@ -423,7 +423,7 @@ This is the initial filament loading into a lane when user inserts filament. Thi
    - **If using tension assist in Passive mode:**
      - Selector moves to FREE position (filament can move freely)
    - **If no tension assist:**
-     - Selector can stay in LOAD or move to FREE
+     - Selector can stay in UNLOAD or move to FREE
 
 7. **Loading Complete**
    - Filament is loaded into lane's buffer zone (20mm before hub)
@@ -431,10 +431,17 @@ This is the initial filament loading into a lane when user inserts filament. Thi
    - **Filament is NOT in toolhead yet** - that's a separate operation
    - Selector disables stepper motor
 
+**Optimization Summary:**
+- **Old approach:** HOME → LOAD → feed → UNLOAD → retract → final (3 selector movements)
+- **New approach:** HOME → UNLOAD → feed+retract → final (2 selector movements)
+- **Benefits:** Less wear, less noise, faster loading
+
 #### Key Insights:
 
 - **TENSION sensors are NOT used during pre-loading** - only PREP and Hub sensors
-- **UNLOAD position has a critical role**: It's used for the 20mm retract operation to create buffer zone
+- **UNLOAD position used from start**: ⚡ **OPTIMIZATION** - Selector moves directly to UNLOAD for both feeding and retracting
+- **Drive motor bidirectional**: Can feed forward AND retract in UNLOAD position
+- **Reduced selector wear**: Only 2 selector movements instead of 3 (HOME→UNLOAD→final vs old HOME→LOAD→UNLOAD→final)
 - **Buffer zone concept**: The 20mm retract creates slack for tension variations during printing
 - **User participation required**: User must manually push filament initially until Drive catches it
 
@@ -655,13 +662,12 @@ PREPARATION PHASE (Подготовка к печати)
 
 Lane Pre-loading - Load all spools into hub waiting zone:
 
-Lane 1 Pre-loading:
+Lane 1 Pre-loading (OPTIMIZED):
    ├─ User inserts filament → PREP1 sensor triggers
-   ├─ Selector → Lane 1 LOAD position (1.5mm)
+   ├─ ⚡ Selector → Lane 1 UNLOAD position (11.5mm) - OPTIMIZATION!
    ├─ User pushes, Drive catches filament
-   ├─ Feed to hub sensor (dist_hub ~100mm)
-   ├─ Selector → UNLOAD position (11.5mm)
-   ├─ Retract 20mm (create buffer zone)
+   ├─ Feed to hub sensor (dist_hub ~100mm) - in UNLOAD position
+   ├─ ✅ Retract 20mm (already in UNLOAD, no selector move needed!)
    ├─ Selector → final position (LOAD/FREE based on mode)
    └─ Status: Slot #1 in waiting zone (loaded_to_hub = True)
 

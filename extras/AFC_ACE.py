@@ -411,16 +411,15 @@ class AFC_ACE(afcBoxTurtle):
 
     def precise_buffer_positioning(self, lane, buffer_distance=20):
         """
-        Precisely position filament in buffer zone using reverse homing.
+        Precisely position filament in buffer zone using coarse loading + reverse homing.
 
-        This method provides accurate positioning independent of dist_hub accuracy.
-        Instead of relying on dist_hub to stop exactly at the right point, we:
-        1. Let AFC load to hub sensor (existing logic)
-        2. Reverse until hub sensor releases (precise edge detection)
-        3. Retract exact buffer_distance to create buffer zone
+        This method provides accurate positioning with minimal overshoot uncertainty:
+        1. Coarse loading: Feed in increments until hub sensor triggers (reduces overshoot to 0-N mm)
+        2. Reverse homing: Retract 1mm steps until hub sensor releases (finds exact edge, ±1mm)
+        3. Buffer zone creation: Retract exact buffer_distance (typically 20mm)
 
-        This ensures filament is always at exactly buffer_distance mm before hub sensor,
-        regardless of dist_hub calibration accuracy.
+        The two-stage approach ensures filament is always at exactly buffer_distance mm
+        before hub sensor, regardless of dist_hub calibration accuracy.
 
         :param lane: Lane object to position
         :param buffer_distance: Distance in mm before hub sensor (default 20mm)
@@ -428,16 +427,32 @@ class AFC_ACE(afcBoxTurtle):
         """
         hub = lane.hub_obj
 
-        # Verify hub sensor is triggered (filament reached hub)
+        # Step 1: Coarse loading - feed in increments until hub sensor triggers
+        # This reduces overshoot uncertainty from 0-50mm (blind dist_hub) to 0-N mm
+        # where N = coarse_move_increment (default 50mm, user configurable)
         if not hub.state:
-            self.logger.error(f"ACE: Hub sensor not triggered for {lane.name}, cannot do precise positioning")
-            return False
+            self.logger.info(f"ACE: Hub sensor not triggered yet, starting coarse loading for {lane.name}")
+            max_coarse_attempts = 40  # Safety limit
+            coarse_attempts = 0
 
-        self.logger.info(f"ACE: Starting precise buffer positioning for {lane.name}")
+            while not hub.state and lane.prep_state and coarse_attempts < max_coarse_attempts:
+                # Feed in configurable increments (default 50mm)
+                lane.move_advanced(lane.coarse_move_increment, lane.SpeedMode.SHORT)
+                coarse_attempts += 1
+                self.logger.debug(f"ACE: Coarse loading attempt {coarse_attempts}, hub sensor: {hub.state}")
 
-        # Step 1: Reverse homing - retract until hub sensor releases
-        # This gives us precise edge detection
-        retract_step = 1  # 1mm per step for accuracy
+            if not hub.state:
+                self.logger.error(f"ACE: Failed to reach hub sensor after {max_coarse_attempts} coarse loading attempts ({max_coarse_attempts * lane.coarse_move_increment}mm)")
+                return False
+
+            self.logger.info(f"ACE: Hub sensor triggered after {coarse_attempts} increments (~{coarse_attempts * lane.coarse_move_increment}mm)")
+
+        # Hub sensor is now triggered (either from coarse loading or previous loading)
+        self.logger.info(f"ACE: Hub sensor triggered - starting precise positioning")
+
+        # Step 2: Reverse homing - retract 1mm increments until hub sensor releases
+        # This finds exact sensor edge, eliminating coarse loading overshoot uncertainty
+        retract_step = 1  # 1mm per step for ±1mm accuracy
         max_retract = 50  # Safety limit: max 50mm backward
         retracted = 0
 
@@ -454,14 +469,12 @@ class AFC_ACE(afcBoxTurtle):
 
         self.logger.info(f"ACE: Hub sensor edge found at {retracted}mm from trigger point")
 
-        # Step 2: Now filament tip is exactly at front edge of hub sensor
-        # Retract buffer_distance to create buffer zone
+        # Step 3: Now filament tip is exactly at front edge of hub sensor
+        # Retract exact buffer_distance to create buffer zone
+        # Note: Selector already in UNLOAD position from prepare_lane_loading() (Hook 1)
         self.logger.info(f"ACE: Retracting {buffer_distance}mm to create buffer zone")
 
-        # Move selector to UNLOAD position for controlled retraction
-        self.move_to_position(lane, self.POSITION_UNLOAD)
-
-        # Retract to buffer zone
+        # Retract to buffer zone (selector already in UNLOAD position)
         lane.move_advanced(-buffer_distance, lane.SpeedMode.SHORT)
 
         # Verify hub sensor is NOT triggered (we're in buffer zone)
@@ -470,6 +483,115 @@ class AFC_ACE(afcBoxTurtle):
             return False
 
         self.logger.info(f"ACE: Buffer zone created successfully - filament at {buffer_distance}mm before hub sensor")
+        return True
+
+    def prepare_lane_loading(self, lane):
+        """
+        Hook 1: Called before lane pre-loading starts (from AFC_lane.py:prep_callback).
+
+        Steps:
+        1. Check if hub is occupied by another lane in toolhead
+        2. If occupied and not printing: auto-unload to buffer zone
+        3. If occupied and printing: show error message
+        4. Move selector to UNLOAD position for ACE optimization
+
+        This reduces selector movements during lane pre-loading:
+        - Instead of: home -> LOAD -> feed -> UNLOAD -> buffer positioning -> final position
+        - We do: home -> UNLOAD -> feed -> buffer positioning -> final position
+
+        :param lane: Lane object being loaded
+        :return: True if preparation succeeded, False on error
+        """
+        self.logger.info(f"ACE: Preparing {lane.name} for loading")
+
+        # Check if hub is occupied by another lane
+        hub = lane.hub_obj
+        if hub.state:
+            # Hub sensor triggered - another lane might be passing through hub
+            current_loaded_lane_name = self.afc.function.get_current_lane()
+
+            if current_loaded_lane_name and current_loaded_lane_name != lane.name:
+                # Another lane is loaded in toolhead
+                if self.afc.function.is_printing():
+                    # Printing is active - cannot auto-unload
+                    self.logger.error(
+                        f"ACE: Cannot load {lane.name} - {current_loaded_lane_name} is in toolhead during print.\n"
+                        f"Wait for print to finish or run TOOL_UNLOAD first."
+                    )
+                    self.afc.error.AFC_error(
+                        f"Cannot load {lane.name} while {current_loaded_lane_name} is in toolhead during print.\n"
+                        "Wait for print to finish or manually unload current lane with TOOL_UNLOAD.",
+                        pause=False
+                    )
+                    return False
+                else:
+                    # Not printing - auto-unload to buffer zone
+                    self.logger.info(
+                        f"ACE: Auto-unloading {current_loaded_lane_name} from toolhead to buffer zone "
+                        f"before loading {lane.name}"
+                    )
+                    # Call TOOL_UNLOAD to retract current lane to buffer zone
+                    try:
+                        self.afc.TOOL_UNLOAD()
+                        self.logger.info(f"ACE: {current_loaded_lane_name} unloaded successfully")
+                    except Exception as e:
+                        self.logger.error(f"ACE: Failed to auto-unload {current_loaded_lane_name}: {e}")
+                        self.afc.error.AFC_error(
+                            f"Failed to auto-unload {current_loaded_lane_name} from toolhead.\n"
+                            "Please manually unload with TOOL_UNLOAD and try again.",
+                            pause=False
+                        )
+                        return False
+
+        # Hub is clear (or will be after auto-unload) - proceed with loading
+        self.logger.info(f"ACE: Moving selector to UNLOAD position for {lane.name}")
+        success = self.move_to_position(lane, self.POSITION_UNLOAD)
+        if not success:
+            self.logger.error(f"ACE: Failed to move selector to UNLOAD position for {lane.name}")
+        return success
+
+    def finalize_lane_loading(self, lane):
+        """
+        Hook 2: Called after filament loaded to hub (from AFC_lane.py:prep_callback).
+        Perform precise buffer positioning and move selector to final position.
+
+        Steps:
+        1. Use precise_buffer_positioning() to create exact 20mm buffer zone
+        2. Move selector to final position based on tension assist configuration:
+           - If active tension assist: LOAD position (motor engaged)
+           - If passive tension assist or no tension: FREE position (motor disengaged)
+
+        :param lane: Lane object that was just loaded
+        :return: True if finalization succeeded, False on error
+        """
+        self.logger.info(f"ACE: Finalizing {lane.name} loading with precise positioning")
+
+        # Step 1: Precise buffer positioning using reverse homing technique
+        if not self.precise_buffer_positioning(lane, buffer_distance=20):
+            self.logger.error(f"ACE: Failed precise buffer positioning for {lane.name}")
+            return False
+
+        # Step 2: Move selector to final position based on tension assist mode
+        if lane.buffer_obj and hasattr(lane.buffer_obj, 'assist_mode'):
+            # Tension assist is configured for this lane
+            if lane.buffer_obj.assist_mode == 'active':
+                # Active mode: keep motor engaged at LOAD position
+                self.logger.info(f"ACE: Active tension assist - moving to LOAD position")
+                success = self.move_to_position(lane, self.POSITION_LOAD)
+            else:
+                # Passive mode: disengage motor at FREE position
+                self.logger.info(f"ACE: Passive tension assist - moving to FREE position")
+                success = self.move_to_position(lane, self.POSITION_FREE)
+        else:
+            # No tension assist configured - move to FREE position
+            self.logger.info(f"ACE: No tension assist - moving to FREE position")
+            success = self.move_to_position(lane, self.POSITION_FREE)
+
+        if not success:
+            self.logger.error(f"ACE: Failed to move selector to final position for {lane.name}")
+            return False
+
+        self.logger.info(f"ACE: Lane {lane.name} loading finalized successfully")
         return True
 
     def set_individual_led(self, lane_index, state, brightness=1.0):
