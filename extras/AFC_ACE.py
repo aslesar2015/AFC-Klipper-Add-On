@@ -111,45 +111,35 @@ class AFC_ACE(afcBoxTurtle):
         self.logo = '<span class=success--text>ACE Ready\n</span>'
         self.logo_error = '<span class=error--text>ACE Not Ready</span>\n'
 
+        # Store all lanes (including steppers) in separate dict for internal use
+        self._all_lanes = dict(self.lanes)  # Save original lanes dict
+
         # AFC_ACE specific: Override load_state for all lanes
         # AFC_ACE doesn't have separate load sensors - uses hub sensor instead
         # Set load_state = False to prevent "LOCKED AND LOADED" status on all lanes
-        for lane_name, lane_obj in self.lanes.items():
+        for lane_name, lane_obj in self._all_lanes.items():
             if lane_obj.load is None:
                 # No load sensor defined - set load_state to False (not loaded)
                 lane_obj.load_state = False
                 self.logger.info(f"ACE: Set load_state=False for {lane_name} (no load sensor, uses hub sensor)")
 
+        # Override lanes property to return only filament lanes (filter out steppers)
+        # This ensures webhooks_status() and web UI only see actual filament lanes
+        self.lanes = {
+            name: lane for name, lane in self._all_lanes.items()
+            if name not in [self.drive_stepper, self.selector_stepper]
+        }
+        self.logger.info(f"ACE: Filtered lanes - showing {len(self.lanes)} filament lanes, hiding 2 stepper motors")
+
     def get_status(self, eventtime=None):
         """
-        Override get_status to filter out stepper lanes from web UI
+        Return status for AFC_ACE unit.
 
-        AFC_ACE has stepper motors (ACE_Drive, ACE_Selector) that are registered as lanes
-        but should not be shown in the web interface. This method filters them out.
+        Note: self.lanes is already filtered in handle_connect() to exclude stepper motors,
+        so no additional filtering is needed here.
         """
-        response = {}
-
-        # Filter out stepper lanes - only include actual filament lanes
-        # Stepper lanes have names matching drive_stepper or selector_stepper
-        filament_lanes = [
-            lane for lane in self.lanes.values()
-            if lane.name not in [self.drive_stepper, self.selector_stepper]
-        ]
-
-        response['lanes'] = [lane.name for lane in filament_lanes]
-        response["extruders"] = []
-        response["hubs"] = []
-        response["buffers"] = []
-
-        for lane in filament_lanes:
-            if lane.hub is not None and lane.hub not in response["hubs"]:
-                response["hubs"].append(lane.hub)
-            if lane.extruder_name is not None and lane.extruder_name not in response["extruders"]:
-                response["extruders"].append(lane.extruder_name)
-            if lane.buffer_name is not None and lane.buffer_name not in response["buffers"]:
-                response["buffers"].append(lane.buffer_name)
-
-        return response
+        # Use parent implementation - self.lanes already filtered
+        return super().get_status(eventtime)
 
     def system_Test(self, cur_lane, delay, assignTcmd, enable_movement):
         """
@@ -158,10 +148,11 @@ class AFC_ACE(afcBoxTurtle):
         AFC_ACE override: Complete reimplementation without movement or reactor calls
         to prevent Timer too close errors during initialization
         """
-        # Skip system test entirely for stepper motors - they don't need T-indices
-        # Only run system_Test for actual filament lanes
+        # Safety check: Skip stepper motors if somehow system_Test is called for them
+        # Note: This should never trigger because self.lanes is filtered in handle_connect()
+        # to exclude steppers, so system_Test won't be called for them during normal operation
         if cur_lane.name in [self.drive_stepper, self.selector_stepper]:
-            self.logger.info('{} (stepper motor) - skipping system test and T-index assignment'.format(cur_lane.name))
+            self.logger.warning('{} (stepper motor) - system_Test called unexpectedly, skipping'.format(cur_lane.name))
             return True
 
         # TEMPORARY: Movement and reactor.pause disabled for testing - system startup only
